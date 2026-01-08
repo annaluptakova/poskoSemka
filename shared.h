@@ -26,7 +26,7 @@ typedef enum{
 }Stat;
 
 typedef struct{
-    MsgTyp msg;
+    MsgTyp msgTyp;
     Parametre pam;
     int replikacie;
     char out[256];

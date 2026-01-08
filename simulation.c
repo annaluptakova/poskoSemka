@@ -1,16 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include "simulations.h"
+#include "simulation.h"
 
 int cesta(int xStart, int yStart, Parametre* pam){
     int x = xStart;
     int y = yStart;
     int kroky = 0; 
-    int limit = pam->maxKroky * 20;
+    int limit = pam->maxKroky * 100;
    // srand(time(NULL));
 
-    while((x != 0 || y != 0) || kroky < limit){
+    while((x != 0 || y != 0) && kroky < limit){
         double nahodne = (double)rand() / RAND_MAX;
         if(nahodne < pam->hore){
             y++;
