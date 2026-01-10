@@ -14,6 +14,8 @@ void inicializacia(Stav* stav){
     stav->bezi = 0;
     stav->mod = SUMMARY;
     stav->pocet = VLAKNA;
+    stav->pam.mapa = NULL;
+    stav->pam.maPrekazky = 0;
     pthread_mutex_init(&stav->mutex, NULL);
 }
 
@@ -26,20 +28,21 @@ void posliKrok(int x, int y, int krok, void* data){
     if(stav->mod == INTERACTIVE){
         int nX = x - (stav->pam.sirka / 2);
         int nY = y - (stav->pam.vyska / 2);
-        Msg msg = {
-            .msgTyp = KROK,
-            .xC = nX,
-            .yC = nY,
-            .krok = krok
-        };
+        Msg msg;
+        memset(&msg, 0, sizeof(Msg));
+        msg.msgTyp = KROK;
+        msg.xC = nX;
+        msg.yC = nY;
+        msg.krok = krok;
         write(STDOUT_FILENO, &msg, sizeof(Msg));
-        sleep(30);
+        usleep(50000); // 50ms delay
     }
 }
 
 void kontrola(Stav* stav){
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+    
     Msg msg;
     ssize_t a = read(STDIN_FILENO, &msg, sizeof(Msg));
 
@@ -56,24 +59,52 @@ void kontrola(Stav* stav){
 void prijmiSpravu(Stav* stav, Msg* msg){
     switch(msg->msgTyp){
         case START:
-            stav->pam = msg->pam;
+            stav->pam.sirka = msg->pam.sirka;
+            stav->pam.vyska = msg->pam.vyska;
+            stav->pam.hore = msg->pam.hore;
+            stav->pam.dole = msg->pam.dole;
+            stav->pam.vlavo = msg->pam.vlavo;
+            stav->pam.vpravo = msg->pam.vpravo;
+            stav->pam.maxKroky = msg->pam.maxKroky;
+            stav->pam.maPrekazky = msg->pam.maPrekazky;
+            stav->pam.mapa = NULL;
+            
             stav->replikacie = msg->replikacie;
             strcpy(stav->out, msg->out);
+            
+            if(stav->pam.maPrekazky && strlen(msg->mapaSubor) > 0){
+                int sirka, vyska;
+                stav->pam.mapa = nacitajMapu(msg->mapaSubor, &sirka, &vyska);
+                if(stav->pam.mapa){
+                    stav->pam.sirka = sirka;
+                    stav->pam.vyska = vyska;
+                } else {
+                    stav->pam.maPrekazky = 0;
+                }
+            }
+            
             spustiSimulaciu(stav);
-        break;
+            break;
+            
         case STOP:
             stav->bezi = 0;
-        break;
+            break;
+            
         default:
-        //?????????????????
-        break;
+            break;
     }
 }
 
 void spustiSimulaciu(Stav* stav){
-   stav->bezi = 1;
-   stav->priemery = alloc_pole(stav->pam.sirka, stav->pam.vyska);
-   stav->pravdepodobnosti = alloc_pole(stav->pam.sirka, stav->pam.vyska);
+    stav->bezi = 1;
+    
+    stav->priemery = alloc_pole(stav->pam.sirka, stav->pam.vyska);
+    stav->pravdepodobnosti = alloc_pole(stav->pam.sirka, stav->pam.vyska);
+    
+    if(!stav->priemery || !stav->pravdepodobnosti){
+        cleanUp(stav);
+        return;
+    }
 
     ThreadData* data = malloc(stav->pocet * sizeof(ThreadData));
     if(!data){
@@ -81,121 +112,137 @@ void spustiSimulaciu(Stav* stav){
         return;
     }
 
-   for(int i = 0; i < stav->replikacie; i++){
-    if(stav->bezi == 0){
-        break;
+    for(int i = 0; i < stav->replikacie && stav->bezi; i++){
+        kontrola(stav);
+        
+        if(!stav->bezi){
+            break;
         }
+
+        if(stav->mod == INTERACTIVE){
+            for(int l = 0; l < stav->pam.vyska && stav->bezi; l++){
+                for(int j = 0; j < stav->pam.sirka && stav->bezi; j++){
+                    if(l == 0 && j == 0){
+                        continue;
+                    }
+                    if(stav->pam.maPrekazky && stav->pam.mapa && stav->pam.mapa[l][j] == 1){
+                        continue;
+                    }
+                    
+                    int kroky = cesta(j, l, &stav->pam, posliKrok, stav);
+
+                    if(kroky > 0){
+                        stav->priemery[l][j] += kroky;
+                    }
+                    if(kroky > 0 && kroky <= stav->pam.maxKroky){
+                        stav->pravdepodobnosti[l][j] += 1.0;
+                    }
+                    kontrola(stav);
+                }
+            }
+        } else {
+            int nPocet = stav->pam.vyska / stav->pocet;
+            int zvysok = stav->pam.vyska % stav->pocet;
+
+            for(int t = 0; t < stav->pocet; t++){
+                data[t].id = t;
+                data[t].startY = t * nPocet + (t < zvysok ? t : zvysok);
+                data[t].koniecY = data[t].startY + nPocet + (t < zvysok ? 1 : 0);
+                data[t].pam = &stav->pam;
+                data[t].priemery = stav->priemery;
+                data[t].pravdepodobnosti = stav->pravdepodobnosti;
+                data[t].replikacie = stav->replikacie;
+                data[t].mutex = &stav->mutex;
+                data[t].callback = NULL;
+                data[t].callbackData = stav;
+                data[t].bezi = &stav->bezi;
+
+                if(pthread_create(&stav->vlakna[t], NULL, funkcia, &data[t]) != 0){
+                    stav->bezi = 0;
+                    break;
+                }
+            }
+
+            for(int t = 0; t < stav->pocet; t++){
+                pthread_join(stav->vlakna[t], NULL);
+            }
+        }
+
+        // Posli priebezne vysledky
+        if(stav->mod == SUMMARY && stav->bezi){
+            for(int j = 0; j < stav->pam.vyska; j++){
+                for(int l = 0; l < stav->pam.sirka; l++){
+                    Msg d;
+                    memset(&d, 0, sizeof(Msg));
+                    d.msgTyp = SUM;
+                    d.xP = l;
+                    d.yP = j;
+                    d.priemer = (j == 0 && l == 0) ? 0 : stav->priemery[j][l] / (i + 1);
+                    d.pravdepodobnost = (j == 0 && l == 0) ? 0 : stav->pravdepodobnosti[j][l] / (i + 1);
+                    posliSpravu(&d);
+                }
+            }
+        }
+        
+        Msg priebeh;
+        memset(&priebeh, 0, sizeof(Msg));
+        priebeh.msgTyp = PROCES;
+        priebeh.aktualnaRepl = i + 1;
+        priebeh.sumRepl = stav->replikacie;
+        posliSpravu(&priebeh);
+    }
     
-    Msg priebeh = {
-        .msgTyp = PROCES,
-        .aktualnaRepl = i + 1,
-        .sumRepl = stav->replikacie
-    };
-    posliSpravu(&priebeh);
-
-    if(stav->mod == INTERACTIVE){
-        for(int l = 0; l < stav->pam.vyska && stav->bezi; l++){
-            for(int j = 0; j < stav->pam.sirka && stav->bezi; j++){
-                if(l == 0 && j == 0){
-                    continue;
-                }
-                int kroky = cesta(j, l, &stav->pam, posliKrok, stav);
-
-                if(kroky > 0){
-                stav->priemery[l][j] += kroky;
-                }
-                if(kroky > 0 && kroky <= stav->pam.maxKroky){
-                    stav->pravdepodobnosti[l][j] += 1.0;
-                }
-                kontrola(stav);
-            }
-        }
-    } else {
-        int nPocet = stav->pam.vyska / stav->pocet;
-        int zvysok = stav->pam.vyska % stav->pocet;
-
-        for(int t = 0; t < stav->pocet; t++){
-            data[t].id = t;
-            data[t].startY = t * nPocet + (t < zvysok ? t : zvysok);
-            data[t].koniecY = data[t].startY + nPocet + (t < zvysok ? 1 : 0);
-            data[t].pam = &stav->pam;
-            data[t].priemery = stav->priemery;
-            data[t].pravdepodobnosti = stav->pravdepodobnosti;
-            data[t].replikacie = stav->replikacie;
-            data[t].mutex = &stav->mutex;
-            data[t].callback = NULL;
-            data[t].callbackData = stav;
-            data[t].bezi = &stav->bezi;
-
-            if(pthread_create(&stav->vlakna[t], NULL, funkcia, &data[t]) !=0){
-                printf("vlakna err");
-                stav->bezi = 0;
-                break;
-            }
-        }
-
-        for(int t = 0; t < stav->pocet; t++){
-            pthread_join(stav->vlakna[t], NULL);
-        }
-
-    }
-    kontrola(stav);
-
-    if(stav->mod == SUMMARY){
-        for(int j = 0; j < stav->pam.vyska; j++){
-            for(int l = 0; l < stav->pam.sirka; l++){
-                Msg d = {
-                    .msgTyp = SUM,
-                    .xP = l,
-                    .yP = j,
-                    .priemer = (j == 0 && l == 0) ? 0 : stav->priemery[j][l] / (i + 1),
-                    .pravdepodobnost = (j == 0 && l == 0) ? 0 : stav->pravdepodobnosti[j][l] / (i + 1)
-                };
-                posliSpravu(&d);
-            }
-        }
-    }
-    }
     free(data);
 
-     for(int i = 0; i < stav->pam.vyska; i++){
-            for(int j = 0; j < stav->pam.sirka; j++){
-                if(i == 0 && j == 0){
-                    continue;
-                } 
+    // Finalne vysledky
+    for(int i = 0; i < stav->pam.vyska; i++){
+        for(int j = 0; j < stav->pam.sirka; j++){
+            if(i == 0 && j == 0){
+                continue;
+            } 
+            if(stav->replikacie > 0){
                 stav->priemery[i][j] /= stav->replikacie;
                 stav->pravdepodobnosti[i][j] /= stav->replikacie;
-
             }
         }
+    }
 
     for(int i = 0; i < stav->pam.vyska; i++){
-            for(int j = 0; j < stav->pam.sirka; j++){
-                Msg d = {
-                    .msgTyp = SUM,
-                    .xP = j,
-                    .yP = i,
-                    .priemer = stav->priemery[i][j],
-                    .pravdepodobnost = stav->pravdepodobnosti[i][j]
-                };
-                posliSpravu(&d);
-            }
+        for(int j = 0; j < stav->pam.sirka; j++){
+            Msg d;
+            memset(&d, 0, sizeof(Msg));
+            d.msgTyp = SUM;
+            d.xP = j;
+            d.yP = i;
+            d.priemer = stav->priemery[i][j];
+            d.pravdepodobnost = stav->pravdepodobnosti[i][j];
+            posliSpravu(&d);
         }
-        ulozVysledky(stav->out, &stav->pam, stav->priemery, stav->pravdepodobnosti, stav->replikacie);
-        Msg koniec = {.msgTyp = KONIEC};
-        posliSpravu(&koniec);
-        stav->bezi = 0;
+    }
     
+    ulozVysledky(stav->out, &stav->pam, stav->priemery, stav->pravdepodobnosti, stav->replikacie);
+    
+    Msg koniec;
+    memset(&koniec, 0, sizeof(Msg));
+    koniec.msgTyp = KONIEC;
+    posliSpravu(&koniec);
+    stav->bezi = 0;
 }
 
-void* funkcie(void* arg){
+void* funkcia(void* arg){
     ThreadData* data = (ThreadData*)arg;
+    
     for(int i = data->startY; i < data->koniecY && *data->bezi; i++){
         for(int j = 0; j < data->pam->sirka && *data->bezi; j++){
-            if(i == 0 && j ==0){
+            if(i == 0 && j == 0){
                 continue;
             }
-            int kroky = cesta(j,i, data->pam, data->callback, data->callbackData);
+            if(data->pam->maPrekazky && data->pam->mapa && data->pam->mapa[i][j] == 1){
+                continue;
+            }
+            
+            int kroky = cesta(j, i, data->pam, data->callback, data->callbackData);
+            
             pthread_mutex_lock(data->mutex);
             if(kroky > 0){
                 data->priemery[i][j] += kroky;
@@ -203,7 +250,6 @@ void* funkcie(void* arg){
             if(kroky > 0 && kroky <= data->pam->maxKroky){
                 data->pravdepodobnosti[i][j] += 1.0;
             }
-
             pthread_mutex_unlock(data->mutex);
         }
     }
@@ -230,11 +276,12 @@ int main(){
     srand(time(NULL));
     Stav stav;
     inicializacia(&stav);
+    
     Msg msg;
-    while(read(STDIN_FILENO, &msg, sizeof(Msg)) > 0){
+    while(read(STDIN_FILENO, &msg, sizeof(Msg)) == sizeof(Msg)){
         prijmiSpravu(&stav, &msg);
     }
-
+    
     cleanUp(&stav);
     return 0;
 }

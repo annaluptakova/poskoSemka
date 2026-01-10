@@ -26,6 +26,6 @@ void posliSpravu(Msg* msg);
 void prijmiSpravu(Stav* stav, Msg* msg);
 void spustiSimulaciu(Stav* stav);
 void* funkcia(void* arg);
-void cleanUp(Stav* stav); //->doriesit lepsie pomenovanie 
+void cleanUp(Stav* stav);
 
 #endif
