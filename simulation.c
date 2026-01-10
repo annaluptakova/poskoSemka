@@ -13,25 +13,29 @@ int cesta(int xStart, int yStart, Parametre* pam, KrokCallback callBack, void* d
 
     while((x != 0 || y != 0) && kroky < limit){
         double nahodne = (double)rand() / RAND_MAX;
+        int novyX = x;
+        int novyY = y;
+        
         if(nahodne < pam->hore){
-            y++;
+            novyY++;
         } else if(nahodne < pam->hore + pam->dole){
-            y--;
-        } else if (nahodne < pam->hore + pam->dole + pam->vlavo){
-            x--;
+            novyY--;
+        } else if(nahodne < pam->hore + pam->dole + pam->vlavo){
+            novyX--;
         } else {
-            x++;
+            novyX++;
         }
 
-        //aby sme nevyskocili z mapy hopefully
-        x = (x + pam->sirka) % pam->sirka;
-        y = (y + pam->vyska) % pam->vyska;
-
-        if(pam->maPrekazky && pam->mapa[y][x] == 1){
+        novyX = (novyX + pam->sirka) % pam->sirka;
+        novyY = (novyY + pam->vyska) % pam->vyska;
+        if(pam->maPrekazky && pam->mapa != NULL && pam->mapa[novyY][novyX] == 1){
             continue;
         }
 
+        x = novyX;
+        y = novyY;
         kroky++;
+        
         if(callBack){
             callBack(x, y, kroky, data);
         }
@@ -139,6 +143,9 @@ int** prekazky(int sirka, int vyska, double pocetnost){
     if(!mapa){
         return NULL;
     }
+
+    int maxPokusov = 100;
+    int pokus = 0;
     do{
         for(int i = 0; i < vyska; i++){
             for(int j = 0; j < sirka; j++){
@@ -148,6 +155,15 @@ int** prekazky(int sirka, int vyska, double pocetnost){
                     mapa[i][j] = ((double)rand() / RAND_MAX < pocetnost) ? 1 : 0;
                 }
             }
+        }
+         pokus++;
+        if(pokus >= maxPokusov){
+            for(int i = 0; i < vyska; i++){
+                for(int j = 0; j < sirka; j++){
+                    mapa[i][j] = 0;
+                }
+            }
+            break;
         }
     }while(!vsetkoOk(mapa, sirka, vyska));
     return mapa;
@@ -182,6 +198,7 @@ int** nacitajMapu(const char* subor, int* sirka, int* vyska){
         free_mapa(mapa, *vyska);
         return NULL;
     }
+    return mapa;
 }
 
 int vsetkoOk(int** mapa, int sirka, int vyska){
@@ -228,11 +245,7 @@ int vsetkoOk(int** mapa, int sirka, int vyska){
         for(int j = 0; j < sirka; j++){
             if(mapa[i][j] == 0 && !navstivene[i][j]){
                 ok = 0;
-                break;
             }
-        }
-        if(!ok){
-            break;
         }
     }
     free_mapa(navstivene, vyska);
@@ -246,10 +259,10 @@ int ulozVysledky(const char* subor, Parametre* pam, double** priemery, double** 
     if(!f){
         return 1;
     }
-    fprintf(f, "%d %d\n", pam->sirka, pam->vyska);
-    fprintf(f, "%.6f %.6f %.6f %.6f\n", pam->hore, pam->dole, pam->vlavo, pam->vpravo);
-    fprintf(f, "%d %d\n", pam->maxKroky, replikacie);
-    fprintf(f, "%d\n", pam->maPrekazky);
+    fprintf(f, " sirka a vyska: %d %d\n", pam->sirka, pam->vyska);
+    fprintf(f, "pravdepodobnost smery : %.6f %.6f %.6f %.6f\n", pam->hore, pam->dole, pam->vlavo, pam->vpravo);
+    fprintf(f, "Max kroky a replikacie: %d %d\n", pam->maxKroky, replikacie);
+    fprintf(f, "Ma prekazky? %d\n", pam->maPrekazky);
 
     if(pam->maPrekazky && pam->mapa){
         for(int i = pam->vyska - 1; i >= 0; i--){
@@ -259,16 +272,17 @@ int ulozVysledky(const char* subor, Parametre* pam, double** priemery, double** 
             fprintf(f, "\n");
         }
     }
-
+    printf("priemery:");
     for(int i = pam->vyska - 1; i >= 0; i--){
         for(int j = 0; j <pam->sirka; j++){
-            fprintf(f, "%.6f", priemery[i][j]);
+            fprintf(f, "%.2f", priemery[i][j]);
         }
         fprintf(f, "\n");
     }
+    printf("pravdepodobnosti:");
     for(int i = pam->vyska - 1; i >= 0; i--){
         for(int j = 0; j <pam->sirka; j++){
-            fprintf(f, "%.6f", pravdepodobnosti[i][j]);
+            fprintf(f, "%.2f", pravdepodobnosti[i][j]);
         }
         fprintf(f, "\n");
     }
@@ -311,6 +325,7 @@ if(pam->maPrekazky){
             for(int j = 0; j < pam->sirka; j++){
                 if(fscanf(f, "%d", &pam->mapa[i][j]) != 1){
                     free_mapa(pam->mapa, pam->vyska);
+                    pam->mapa = NULL;
                     fclose(f);
                     return 1;
                 }
@@ -336,14 +351,19 @@ if(pam->maPrekazky){
         fclose(f);
         return 1;
     }
+    double** pr = *priemery;
+    double** prav = *pravdepodobnosti;
     
     for(int i = pam->vyska - 1; i >= 0; i--){
         for(int j = 0; j < pam->sirka; j++){
-            if(fscanf(f, "%lf", &priemery[i][j]) != 1){
+            if(fscanf(f, "%lf", &pr[i][j]) != 1){
                 free_pole(*priemery, pam->vyska);
                 free_pole(*pravdepodobnosti, pam->vyska);
+                *priemery = NULL;
+                *pravdepodobnosti = NULL;
                 if(pam->mapa){
                     free_mapa(pam->mapa, pam->vyska);
+                    pam->mapa = NULL;
                 }
                 fclose(f);
                 return 1;
@@ -353,12 +373,14 @@ if(pam->maPrekazky){
     
     for(int i = pam->vyska - 1; i >= 0; i--){
         for(int j = 0; j < pam->sirka; j++){
-            if(fscanf(f, "%lf", &pravdepodobnosti[i][j]) != 1){
+            if(fscanf(f, "%lf", &prav[i][j]) != 1){
                 free_pole(*priemery, pam->vyska);
                 free_pole(*pravdepodobnosti, pam->vyska);
+                *priemery = NULL;
+                *pravdepodobnosti = NULL;
                 if(pam->mapa){
                     free_mapa(pam->mapa, pam->vyska);
-                }
+                    pam->mapa = NULL;
                 fclose(f);
                 return 1;
             }

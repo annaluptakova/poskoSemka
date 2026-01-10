@@ -9,12 +9,13 @@ typedef struct{
     double dole;
     double vlavo;
     double vpravo;
-    int maxKroky; // -> k
+    int maxKroky;
     int** mapa;
     int maPrekazky;
 } Parametre;
 
 typedef void (*KrokCallback)(int x, int y, int krok, void* data);
+
 typedef struct {
     int id;
     int startY;
@@ -27,8 +28,7 @@ typedef struct {
     pthread_mutex_t* mutex;
     void* callbackData;
     volatile int* bezi;
-}ThreadData;
-
+} ThreadData;
 
 int cesta(int xStart, int yStart, Parametre* pam, KrokCallback callBack, void* data);
 double priemernyPocet(int x, int y, int replikacie, Parametre* pam, KrokCallback callBack, void* data);
@@ -41,6 +41,6 @@ int** prekazky(int sirka, int vyska, double pocetnost);
 int** nacitajMapu(const char* subor, int* sirka, int* vyska);
 int vsetkoOk(int** mapa, int sirka, int vyska);
 int ulozVysledky(const char* subor, Parametre* pam, double** priemery, double** pravdepodobnosti, int replikacie);
-int nacitajVysledky(const char* subor, Parametre* pam, double** priemery, double** pravdepodobnosti, int replikacie);
+int nacitajVysledky(const char* subor, Parametre* pam, double*** priemery, double*** pravdepodobnosti, int* replikacie);
 
 #endif
